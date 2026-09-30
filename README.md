@@ -9,7 +9,7 @@ A mobile-first web app (installable PWA) for UK tradespeople. It gives each busi
 Needs Node.js 22.13 or newer. There's no database server to install, because it uses SQLite built into Node.
 
 ```bash
-cd review-qr
+git clone https://github.com/martynkenneth/reviewqr && cd reviewqr
 npm install
 npm run dev          # http://localhost:3000
 npm test             # end-to-end tests (including decoding the generated QR codes)

@@ -1,5 +1,5 @@
 {
-  "name": "review-qr",
+  "name": "reviewqr",
   "version": "0.1.0",
   "description": "Branded Google review QR codes for UK tradespeople (mobile-first PWA)",
   "scripts": {
