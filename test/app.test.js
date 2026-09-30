@@ -269,7 +269,7 @@ test('admin can see stats and disable an account, which stops its QR', async () 
   assert.equal(res.status, 403);
 });
 
-test('expired trial: app points to billing; printed QR has a grace period', async () => {
+test('expired trial: app points to billing and the QR stops working', async () => {
   const c = client();
   await c.signup('late@example.com');
   await c.setup({ name: 'Late Locksmiths' });
@@ -277,9 +277,11 @@ test('expired trial: app points to billing; printed QR has a grace period', asyn
   db.prepare("UPDATE users SET trial_ends_at = ? WHERE email = 'late@example.com'").run(new Date(Date.now() - 864e5).toISOString());
   assert.equal((await c.get('/app/show')).headers.get('location'), '/app/billing?expired=1');
   assert.match((await c.get('/app')).text_, /free trial has ended/);
-  assert.equal((await client().get(`/r/${slug}`)).status, 200); // within grace
-  db.prepare("UPDATE users SET trial_ends_at = ? WHERE email = 'late@example.com'").run(new Date(Date.now() - 60 * 864e5).toISOString());
   assert.equal((await client().get(`/r/${slug}`)).status, 410);
+  assert.equal((await client().get(`/r/${slug}/go`)).status, 410);
+  // Subscribing switches the same QR code back on.
+  db.prepare("UPDATE users SET subscription_status = 'active', stripe_subscription_id = 'sub_late' WHERE email = 'late@example.com'").run();
+  assert.equal((await client().get(`/r/${slug}`)).status, 200);
 });
 
 test('Stripe webhook: signed events update the subscription; unsigned are refused', async () => {

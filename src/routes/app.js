@@ -112,9 +112,16 @@ function accessBanner(user) {
   const state = account.accessState(user);
   if (state === 'trial') {
     const d = account.trialDaysLeft(user);
-    return html`<a class="banner" href="/app/billing"
-      ><span>Free trial: <strong>${d} day${d === 1 ? '' : 's'} left</strong></span><span class="banner-cta">Choose a plan</span></a
-    >`;
+    const days = `${d} day${d === 1 ? '' : 's'}`;
+    // In the last few days, spell out what happens so nobody is caught out.
+    return d <= 3
+      ? html`<a class="banner banner-warn" href="/app/billing"
+          ><span>Your free trial ends in <strong>${days}</strong>. Your QR code will stop working unless you choose a plan.</span
+          ><span class="banner-cta">Choose a plan</span></a
+        >`
+      : html`<a class="banner" href="/app/billing"
+          ><span>Free trial: <strong>${days} left</strong></span><span class="banner-cta">Choose a plan</span></a
+        >`;
   }
   if (state === 'past_due') {
     return html`<a class="banner banner-warn" href="/app/billing"
@@ -123,7 +130,8 @@ function accessBanner(user) {
   }
   if (state === 'expired') {
     return html`<a class="banner banner-warn" href="/app/billing"
-      ><span>Your free trial has ended.</span><span class="banner-cta">Choose a plan</span></a
+      ><span>Your free trial has ended and <strong>your QR code has stopped working</strong>. Choose a plan to switch it back on.</span
+      ><span class="banner-cta">Choose a plan</span></a
     >`;
   }
   return '';

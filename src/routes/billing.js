@@ -67,7 +67,7 @@ router.get('/', sec.requireUser, (req, res) => {
       title: 'Plans',
       active: 'settings',
       back: '/app/settings',
-      body: html`${req.query.expired ? html`<p class="alert alert-warn">Your free trial has ended. Choose a plan to keep using your review QR.</p>` : ''}
+      body: html`${req.query.expired ? html`<p class="alert alert-warn">Your free trial has ended, so your QR code has stopped working. Choose a plan and it switches straight back on — the same code, so anything you've printed works again.</p>` : ''}
         ${req.query.error ? html`<p class="alert alert-error">Something went wrong starting the payment. Please try again.</p>` : ''}
         <h1>Choose your plan</h1>
         ${subscribed

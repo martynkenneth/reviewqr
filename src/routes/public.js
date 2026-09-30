@@ -189,6 +189,7 @@ router.get('/terms', (req, res) =>
         <h1>Terms</h1>
         <p>Use ${config.appName} to invite genuine customers to review your business on Google. Don't offer incentives for reviews, don't ask only happy customers, and don't write reviews yourself — these break Google's rules and can get reviews removed.</p>
         <p>You can cancel any time from Settings. Your subscription runs until the end of the period you've paid for.</p>
+        <p>If your free trial ends without a plan, or your subscription ends, your QR code stops working until you subscribe again. It's the same code when it comes back, so nothing needs reprinting.</p>
       </main>`,
     }),
   ),

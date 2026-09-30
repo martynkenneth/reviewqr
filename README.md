@@ -67,7 +67,7 @@ To make yourself an admin, put your email in `ADMIN_EMAILS` or run `npm run make
 ### Decisions you may want to change
 
 - **Trial without a card.** Signing up needs no card. If someone subscribes during the trial, Stripe doesn't charge them until the trial ends.
-- **Lapsed accounts.** If an account's trial or subscription ends, its printed QR codes keep working for `QR_GRACE_DAYS` (default 30). After that, the customer page says the link isn't active. Disabled accounts stop straight away.
+- **When the trial ends, the QR code stops.** Without a plan, the customer page says "This review link isn't active right now" (so do cancelled subscriptions once the paid period runs out, and disabled accounts). Subscribing switches the same code back on, so nothing needs reprinting. The dashboard warns in the last 3 days of the trial. A failed card payment does *not* stop the QR while Stripe retries.
 - **Branded sign wording.** The branded sign says "How did we do? Scan to leave us a Google review." The suggested "Happy with our work?" was left out because it only invites happy customers, which goes against Google's policy on selectively asking for reviews.
 
 ## Adding the future features

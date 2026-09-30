@@ -30,18 +30,10 @@ function accessState(user) {
 
 const hasAccess = (user) => accessState(user) !== 'expired';
 
-// When did access end? Used to give printed QR codes a grace period.
-function accessEndedAt(user) {
-  const ends = [user.trial_ends_at, user.current_period_end].filter(Boolean).map((d) => new Date(d));
-  return new Date(Math.max(...ends.map(Number)));
-}
-
-// Should the public review page still send customers to Google?
-function qrIsLive(user) {
-  if (user.disabled_at) return false;
-  if (hasAccess(user)) return true;
-  return Date.now() - accessEndedAt(user) < config.qrGraceDays * 864e5;
-}
+// Should the public review page send customers to Google? Only while the
+// account is on its trial or paid up. When the trial ends without a plan,
+// the QR code stops working until they subscribe.
+const qrIsLive = (user) => !user.disabled_at && hasAccess(user);
 
 const planById = (id) => config.plans.find((p) => p.id === id) || null;
 

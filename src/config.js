@@ -29,10 +29,6 @@ const config = {
   uploadDir: path.join(dataDir, 'uploads'),
   sessionDays: Number(env.SESSION_DAYS || 60),
   trialDays: Number(env.TRIAL_DAYS || 14),
-  // How long a lapsed account's printed QR codes keep working before the
-  // customer page says the link is inactive. Printed cards live for years, so
-  // be generous — breaking them is a bad experience for the customer.
-  qrGraceDays: Number(env.QR_GRACE_DAYS || 30),
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 
   smtpUrl: env.SMTP_URL || '',
