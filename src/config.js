@@ -22,8 +22,8 @@ const config = {
   // Public base URL, used inside QR codes and emails. Must be the real domain
   // in production, because it is printed on cards and vans.
   baseUrl: (env.BASE_URL || `http://localhost:${env.PORT || 3000}`).replace(/\/$/, ''),
-  appName: env.APP_NAME || 'ReviewQR',
-  supportEmail: env.SUPPORT_EMAIL || 'support@example.com',
+  appName: env.APP_NAME || 'QR Review',
+  supportEmail: env.SUPPORT_EMAIL || 'support@qrreview.co.uk',
   dataDir,
   dbFile: path.join(dataDir, 'app.db'),
   uploadDir: path.join(dataDir, 'uploads'),
@@ -32,7 +32,7 @@ const config = {
   adminEmails: (env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 
   smtpUrl: env.SMTP_URL || '',
-  mailFrom: env.MAIL_FROM || 'ReviewQR <no-reply@example.com>',
+  mailFrom: env.MAIL_FROM || 'QR Review <no-reply@qrreview.co.uk>',
 
   stripe: {
     secretKey: env.STRIPE_SECRET_KEY || '',

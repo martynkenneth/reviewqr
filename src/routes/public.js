@@ -8,6 +8,7 @@ const { icon } = require('../views/icons');
 const { qrSvg } = require('../lib/qr');
 const { recordVisit } = require('../lib/analytics');
 const { qrIsLive } = require('../lib/account');
+const { industries, defaultIndustry } = require('../views/industries');
 
 const router = express.Router();
 
@@ -29,32 +30,31 @@ function pricingCards() {
   );
 }
 
-router.get('/', (req, res) => {
+function landingPage(req, res, ind) {
   const demo = raw(qrSvg(`${config.baseUrl}/r/demo`));
+  const ex = ind.example;
   const features = [
     ['star', 'Branded with your logo', 'Your name, logo and colour — not ours.'],
     ['qr', 'Permanent QR code', 'Change your Google link any time. Printed codes keep working.'],
-    ['print', 'Download for invoices and cards', 'High-res PNG plus A6, A5 and A4 print-ready PDFs.'],
+    ['print', ...ind.printFeature],
     ['share', 'Share by WhatsApp, SMS or email', 'Send your review link with a ready-written message.'],
     ['phone', 'Works on any phone', 'Save it to your home screen. It opens like an app.'],
     ['check', 'No app for customers', 'They scan with their camera. No sign-ups, no details asked.'],
   ];
   res.send(
     sitePage({
-      title: 'Google review QR codes for tradespeople',
-      description:
-        'Create your branded review QR code, show it to your customer, and send them straight to your Google review page.',
+      title: ind.title,
+      description: ind.lead,
+      // The default industry is served at both / and /<slug>; tell search engines / is the real one.
+      canonical: ind === defaultIndustry ? `${config.baseUrl}/` : `${config.baseUrl}/${ind.slug}`,
       user: req.user,
       body: html`<main>
         <section class="hero">
           <div class="wrap hero-grid">
             <div>
-              <p class="eyebrow">For plumbers, sparkies, builders and every trade</p>
-              <h1>Get more Google reviews before you leave the job.</h1>
-              <p class="lead">
-                Create your branded review QR code, show it to your customer, and send them straight to your Google
-                review page.
-              </p>
+              <p class="eyebrow">${ind.eyebrow}</p>
+              <h1>${ind.headline}</h1>
+              <p class="lead">${ind.lead}</p>
               <div class="cta-row">
                 <a class="btn btn-large" href="/signup">Create My Review QR</a>
                 <a class="btn btn-large btn-ghost" href="#how">See How It Works</a>
@@ -64,10 +64,10 @@ router.get('/', (req, res) => {
             <div class="phone-mock" aria-label="A phone showing a large review QR code">
               <div class="phone">
                 <div class="phone-screen">
-                  <div class="mock-logo">AP</div>
-                  <p class="mock-thanks">Thanks for choosing<br /><strong>ABC Plumbing</strong></p>
+                  <div class="mock-logo" style="background:${ex.colour}">${ex.initials}</div>
+                  <p class="mock-thanks">Thanks for choosing<br /><strong>${ex.name}</strong></p>
                   <p class="mock-ask">Would you mind leaving us a Google review?</p>
-                  <div class="mock-qr">${demo}</div>
+                  <div class="mock-qr" style="border-color:${ex.colour}">${demo}</div>
                   <p class="mock-hint">Scan with your phone camera</p>
                 </div>
               </div>
@@ -79,21 +79,13 @@ router.get('/', (req, res) => {
           <div class="wrap">
             <h2>Get your customer to your Google review page in under 10 seconds</h2>
             <ol class="steps">
-              <li>
-                <span class="step-num">1</span>
-                <h3>Finish the job</h3>
-                <p>Open your review screen with one tap.</p>
-              </li>
-              <li>
-                <span class="step-num">2</span>
-                <h3>Show or share your QR</h3>
-                <p>Your customer scans it with their phone camera.</p>
-              </li>
-              <li>
-                <span class="step-num">3</span>
-                <h3>Customer reviews you on Google</h3>
-                <p>They write and submit the review directly on Google.</p>
-              </li>
+              ${ind.steps.map(
+                ([h, p], i) => html`<li>
+                  <span class="step-num">${i + 1}</span>
+                  <h3>${h}</h3>
+                  <p>${p}</p>
+                </li>`,
+              )}
             </ol>
           </div>
         </section>
@@ -136,8 +128,8 @@ router.get('/', (req, res) => {
             <details class="faq">
               <summary>What if my Google review link changes?</summary>
               <p>
-                Just paste the new link in Settings. Your QR code points to your own permanent link, so cards, vans
-                and signs you've already printed keep working.
+                Just paste the new link in Settings. Your QR code points to your own permanent link, so
+                ${ind.printedThings} you've already printed keep working.
               </p>
             </details>
             <details class="faq">
@@ -156,14 +148,17 @@ router.get('/', (req, res) => {
 
         <section class="section cta-final">
           <div class="wrap center">
-            <h2>Ready before your next job?</h2>
+            <h2>${ind.finalCta}</h2>
             <a class="btn btn-large" href="/signup">Create My Review QR</a>
           </div>
         </section>
       </main>`,
     }),
   );
-});
+}
+
+router.get('/', (req, res) => landingPage(req, res, defaultIndustry));
+for (const ind of Object.values(industries)) router.get(`/${ind.slug}`, (req, res) => landingPage(req, res, ind));
 
 router.get('/privacy', (req, res) =>
   res.send(
@@ -227,12 +222,12 @@ router.get('/r/demo', (req, res) =>
   res.send(
     barePage({
       title: 'Demo review page',
-      business: { brand_colour: '#1d4ed8' },
+      business: { brand_colour: defaultIndustry.example.colour },
       bodyClass: 'customer',
       body: html`<p class="preview-bar">Demo — this is what your customers see. <a href="/signup">Create yours</a></p>
         <main class="customer-card">
-          <div class="customer-initials">AP</div>
-          <h1>Thanks for choosing ABC Plumbing</h1>
+          <div class="customer-initials">${defaultIndustry.example.initials}</div>
+          <h1>Thanks for choosing ${defaultIndustry.example.name}</h1>
           <p class="customer-lead">We'd love to hear about your experience.</p>
           <a class="btn btn-brand btn-huge btn-block" href="/signup">${icon('star')} Leave a Google Review</a>
           <p class="muted small">You'll be taken to Google to write and submit your review.</p>

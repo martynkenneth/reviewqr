@@ -1,7 +1,7 @@
 {
-  "name": "reviewqr",
+  "name": "qrreview",
   "version": "0.1.0",
-  "description": "Branded Google review QR codes for UK tradespeople (mobile-first PWA)",
+  "description": "Branded Google review QR codes for UK small businesses, starting with trades (mobile-first PWA)",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",

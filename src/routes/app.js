@@ -43,7 +43,7 @@ const shareUrl = (b) => `${qr.reviewUrl(b.qr_slug)}?s=link`;
 const shareMessage = (b) =>
   `Hi, thanks again for choosing ${b.name}. If you have a moment, we'd really appreciate a Google review: ${shareUrl(b)}`;
 const fileBase = (b) =>
-  (b.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'review').slice(0, 40) + '-review-qr';
+  (b.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'review').slice(0, 40) + '-qr-review';
 
 // --- Business setup (first run) ----------------------------------------------
 
@@ -153,7 +153,7 @@ router.get('/', sec.requireBusiness, (req, res) => {
       body: html`${accessBanner(req.user)}
         ${req.query.welcome
           ? html`<p class="alert alert-ok" role="status">
-              ${icon('check')} Your review QR is ready. It's permanent — print it, share it, stick it on the van.
+              ${icon('check')} Your review QR is ready. It's permanent — print it, share it, put it anywhere your customers will see it.
             </p>`
           : ''}
         <section class="biz-head">
@@ -246,12 +246,12 @@ router.get('/download', sec.requireBusiness, requireAccess, (req, res) => {
             ['SVG', '/app/files/qr.svg'],
           ])}
           ${item('Branded QR', 'Your logo, name, QR and a short message. For social media, WhatsApp and screens.', [['PNG', '/app/files/card.png']])}
-          ${item('A6 counter card', '105 × 148 mm. Print for your counter, van dashboard or leave-behind.', [['PDF', '/app/files/a6.pdf']])}
+          ${item('A6 counter card', '105 × 148 mm. For your counter, reception desk, van dashboard or to leave behind.', [['PDF', '/app/files/a6.pdf']])}
           ${item('A5 printable sign', '148 × 210 mm. For reception desks and notice boards.', [['PDF', '/app/files/a5.pdf']])}
           ${item('A4 printable sign', '210 × 297 mm. For windows and walls.', [['PDF', '/app/files/a4.pdf']])}
         </ul>
         <p class="muted small">
-          Tip: for van livery, business cards or large signs, send the <strong>SVG</strong> to your printer or signwriter —
+          Tip: for business cards, shop windows, van livery or large signs, send the <strong>SVG</strong> to your printer or signwriter —
           it stays sharp at any size. Your QR code is permanent, so it's safe to print thousands.
         </p>
         <a class="btn btn-block btn-ghost" href="/app/share">${icon('share')} Share QR instead</a>`,

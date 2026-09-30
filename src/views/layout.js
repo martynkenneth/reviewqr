@@ -5,12 +5,13 @@ const { textOn } = require('../lib/colour');
 
 const ASSET_VERSION = require('../../package.json').version;
 
-function head({ title, description, noindex }) {
+function head({ title, description, noindex, canonical }) {
   return html`<meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>${title ? `${title} · ${config.appName}` : config.appName}</title>
     ${description ? html`<meta name="description" content="${description}" />` : ''}
     ${noindex ? html`<meta name="robots" content="noindex" />` : ''}
+    ${canonical ? html`<link rel="canonical" href="${canonical}" />` : ''}
     <meta name="theme-color" content="#0f766e" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon-192.png" type="image/png" />
@@ -29,11 +30,11 @@ function brandStyle(business) {
 }
 
 // Marketing and login pages.
-function sitePage({ title, description, body, user, bodyClass = '' }) {
+function sitePage({ title, description, canonical, body, user, bodyClass = '' }) {
   return html`<!doctype html>
     <html lang="en-GB">
       <head>
-        ${head({ title, description })}
+        ${head({ title, description, canonical })}
       </head>
       <body class="site ${bodyClass}">
         <header class="site-header">

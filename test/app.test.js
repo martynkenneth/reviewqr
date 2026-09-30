@@ -116,6 +116,13 @@ test('landing page and PWA files are served', async () => {
   assert.equal(r.status, 200);
   assert.match(r.text_, /Get more Google reviews before you leave the job\./);
   assert.match(r.text_, /£9\.99/);
+  assert.match(r.text_, /<title>Google review QR codes for tradespeople · QR Review<\/title>/);
+  assert.match(r.text_, /<link rel="canonical" href="https:\/\/reviews.example\/" \/>/);
+  // The trades page is the same content, pointing search engines at the home page.
+  const trades = await c.get('/trades');
+  assert.equal(trades.status, 200);
+  assert.match(trades.text_, /before you leave the job/);
+  assert.match(trades.text_, /<link rel="canonical" href="https:\/\/reviews.example\/" \/>/);
   assert.equal((await c.get('/manifest.webmanifest')).status, 200);
   assert.equal((await c.get('/sw.js')).status, 200);
   assert.equal((await c.get('/icons/icon-512.png')).status, 200);

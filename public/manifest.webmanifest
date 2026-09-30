@@ -1,6 +1,6 @@
 {
-  "name": "ReviewQR – Google review QR codes",
-  "short_name": "ReviewQR",
+  "name": "QR Review – Google review QR codes",
+  "short_name": "QR Review",
   "description": "Show your branded QR code and send customers straight to your Google review page.",
   "id": "/app",
   "start_url": "/app?source=pwa",

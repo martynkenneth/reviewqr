@@ -14,7 +14,7 @@ function businessForm(req, { action, values = {}, error, submitLabel, logoUrl })
 
     <label
       >Business name
-      <input name="name" value="${values.name || ''}" maxlength="80" required placeholder="e.g. ABC Plumbing" autocomplete="organization" data-preview-name />
+      <input name="name" value="${values.name || ''}" maxlength="80" required placeholder="e.g. ABC Plumbing or Studio Hair" autocomplete="organization" data-preview-name />
     </label>
 
     <div class="field">
