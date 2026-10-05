@@ -2,7 +2,7 @@
 const express = require('express');
 const multer = require('multer');
 const config = require('../config');
-const { db, now } = require('../db');
+const { query } = require('../db');
 const { html, raw } = require('../html');
 const { appPage, barePage } = require('../views/layout');
 const { icon } = require('../views/icons');
@@ -16,6 +16,8 @@ const account = require('../lib/account');
 const { initials } = require('./public');
 const { EMAIL, cleanEmail, errorBox, noticeBox } = require('./auth');
 const sec = require('../security');
+const auth = require('../lib/auth');
+const wrap = require('../wrap');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES, files: 1, fields: 20 } });
@@ -26,7 +28,7 @@ function withUpload(req, res, next) {
   upload.single('logo')(req, res, (err) => {
     if (err) {
       req.uploadError =
-        err.code === 'LIMIT_FILE_SIZE' ? 'That image is too big. Please use one under 5MB.' : 'Upload failed. Please try again.';
+        err.code === 'LIMIT_FILE_SIZE' ? `That image is too big. Please use one under ${MAX_BYTES / 1024 / 1024}MB.` : 'Upload failed. Please try again.';
       req.body = req.body || {};
     }
     sec.verifyCsrf(req, res, next);
@@ -95,11 +97,11 @@ router.post('/setup', sec.requireUser, withUpload, async (req, res, next) => {
     if (req.business) return res.redirect('/app');
     const { values, error } = await readBusinessForm(req, null);
     if (error) return res.status(400).send(setupPage(req, { values, error }));
-    const t = now();
-    db.prepare(
-      `INSERT INTO businesses (user_id, name, logo_file, brand_colour, google_review_url, qr_slug, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(req.user.id, values.name, values.logo_file, values.brand_colour, values.google_review_url, account.newSlug(), t, t);
+    await query(
+      `INSERT INTO businesses (user_id, name, logo_file, brand_colour, google_review_url, qr_slug)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [req.user.id, values.name, values.logo_file, values.brand_colour, values.google_review_url, await account.newSlug()],
+    );
     res.redirect('/app?welcome=1');
   } catch (e) {
     next(e);
@@ -141,9 +143,9 @@ function qrBlock(b, cls = '') {
   return html`<div class="qr-frame ${cls}">${raw(qr.qrSvg(qr.reviewUrl(b.qr_slug), { colour: qrColour(b.brand_colour) }))}</div>`;
 }
 
-router.get('/', sec.requireBusiness, (req, res) => {
+router.get('/', sec.requireBusiness, wrap(async (req, res) => {
   const b = req.business;
-  const s = stats(b.id);
+  const s = await stats(b.id);
   const link = shareUrl(b);
   res.send(
     appPage({
@@ -195,7 +197,7 @@ router.get('/', sec.requireBusiness, (req, res) => {
         <p class="center small"><a href="/r/${b.qr_slug}" target="_blank" rel="noopener">Preview your customer page ↗</a></p>`,
     }),
   );
-});
+}));
 
 // --- Show QR (full screen) -----------------------------------------------------
 
@@ -325,8 +327,8 @@ router.get('/share', sec.requireBusiness, requireAccess, (req, res) => {
 
 // --- Analytics -----------------------------------------------------------------
 
-router.get('/analytics', sec.requireBusiness, (req, res) => {
-  const s = stats(req.business.id);
+router.get('/analytics', sec.requireBusiness, wrap(async (req, res) => {
+  const s = await stats(req.business.id);
   const max = Math.max(1, ...s.days.map((d) => d.views));
   const fmt = (k) => new Date(`${k}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   res.send(
@@ -373,13 +375,14 @@ router.get('/analytics', sec.requireBusiness, (req, res) => {
         </section>`,
     }),
   );
-});
+}));
 
 // --- Settings ------------------------------------------------------------------
 
 const NOTICES = {
   saved: 'Saved. Your QR code hasn\'t changed — anything already printed keeps working.',
   email: 'Email updated.',
+  email_sent: "Check your inbox: we've sent a link to confirm the change. If you also get one at your old address, tap both.",
   password: 'Password changed.',
   subscribed: "Thanks! You're subscribed.",
 };
@@ -473,40 +476,56 @@ router.post('/settings/business', sec.requireBusiness, withUpload, async (req, r
     const b = req.business;
     const { values, error } = await readBusinessForm(req, b);
     if (error) return res.status(400).send(settingsPage(req, { values: { ...b, ...values }, error }));
-    db.prepare(
-      'UPDATE businesses SET name = ?, logo_file = ?, brand_colour = ?, google_review_url = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-    ).run(values.name, values.logo_file, values.brand_colour, values.google_review_url, now(), b.id, req.user.id);
-    if (b.logo_file && b.logo_file !== values.logo_file) deleteLogo(b.logo_file);
+    await query(
+      `UPDATE businesses SET name = $1, logo_file = $2, brand_colour = $3, google_review_url = $4, updated_at = now()
+       WHERE id = $5 AND user_id = $6`,
+      [values.name, values.logo_file, values.brand_colour, values.google_review_url, b.id, req.user.id],
+    );
+    if (b.logo_file && b.logo_file !== values.logo_file) await deleteLogo(b.logo_file);
     res.redirect('/app/settings?notice=saved');
   } catch (e) {
     next(e);
   }
 });
 
-function checkCurrentPassword(req, res) {
-  if (sec.verifyPassword(String(req.body.current_password || ''), req.user.password_hash)) return true;
+// Re-checks the current password with Supabase before account changes.
+async function checkCurrentPassword(req, res) {
+  const r = await auth.signIn(req.user.email, String(req.body.current_password || ''));
+  if (!r.error) {
+    await auth.signOut(r.session.access_token); // we only needed the check, not a new login
+    return true;
+  }
   res.status(400).send(settingsPage(req, { accountError: 'Your current password is wrong.' }));
   return false;
 }
 
-router.post('/settings/email', sec.requireBusiness, (req, res) => {
-  if (!checkCurrentPassword(req, res)) return;
-  const email = cleanEmail(req.body.email);
-  if (!EMAIL.test(email)) return res.status(400).send(settingsPage(req, { accountError: 'Please enter a valid email address.' }));
-  const taken = db.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').get(email, req.user.id);
-  if (taken) return res.status(400).send(settingsPage(req, { accountError: 'That email is already used by another account.' }));
-  db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, req.user.id);
-  res.redirect('/app/settings?notice=email');
-});
+router.post(
+  '/settings/email',
+  sec.requireBusiness,
+  wrap(async (req, res) => {
+    const email = cleanEmail(req.body.email);
+    if (!EMAIL.test(email)) return res.status(400).send(settingsPage(req, { accountError: 'Please enter a valid email address.' }));
+    if (email === req.user.email) return res.redirect('/app/settings');
+    if (!(await checkCurrentPassword(req, res))) return;
+    // Supabase emails a confirmation link; the change happens when it's tapped.
+    const r = await auth.requestEmailChange(req.tokens, email, `${config.baseUrl}/auth/confirm`);
+    if (r.error) return res.status(400).send(settingsPage(req, { accountError: r.error }));
+    res.redirect('/app/settings?notice=email_sent');
+  }),
+);
 
-router.post('/settings/password', sec.requireBusiness, (req, res) => {
-  if (!checkCurrentPassword(req, res)) return;
-  const problem = sec.passwordProblem(req.body.new_password);
-  if (problem) return res.status(400).send(settingsPage(req, { accountError: problem }));
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(sec.hashPassword(req.body.new_password), req.user.id);
-  sec.destroyAllSessions(req.user.id);
-  sec.createSession(res, req.user.id); // stay logged in here, logged out elsewhere
-  res.redirect('/app/settings?notice=password');
-});
+router.post(
+  '/settings/password',
+  sec.requireBusiness,
+  wrap(async (req, res) => {
+    const problem = sec.passwordProblem(req.body.new_password);
+    if (problem) return res.status(400).send(settingsPage(req, { accountError: problem }));
+    if (!(await checkCurrentPassword(req, res))) return;
+    const r = await auth.setPassword(req.user.id, req.body.new_password);
+    if (r.error) return res.status(400).send(settingsPage(req, { accountError: r.error }));
+    await auth.signOut(req.tokens.access_token, 'others'); // stay logged in here, logged out elsewhere
+    res.redirect('/app/settings?notice=password');
+  }),
+);
 
 module.exports = { router, accessBanner };

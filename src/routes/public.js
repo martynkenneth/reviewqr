@@ -1,7 +1,9 @@
 // Marketing pages and the customer-facing review page (/r/<slug>).
 const express = require('express');
 const config = require('../config');
-const { db } = require('../db');
+const { one } = require('../db');
+const { clientIp } = require('../security');
+const wrap = require('../wrap');
 const { html, raw } = require('../html');
 const { sitePage, barePage } = require('../views/layout');
 const { icon } = require('../views/icons');
@@ -193,12 +195,11 @@ router.get('/terms', (req, res) =>
 // --- Customer review page ----------------------------------------------------
 
 function findBySlug(slug) {
-  return db
-    .prepare(
-      `SELECT b.*, u.subscription_status, u.trial_ends_at, u.current_period_end, u.disabled_at
-       FROM businesses b JOIN users u ON u.id = b.user_id WHERE b.qr_slug = ?`,
-    )
-    .get(String(slug).toLowerCase());
+  return one(
+    `SELECT b.*, p.subscription_status, p.stripe_subscription_id, p.trial_ends_at, p.current_period_end, p.disabled_at
+     FROM businesses b JOIN profiles p ON p.id = b.user_id WHERE b.qr_slug = $1`,
+    [String(slug).toLowerCase()],
+  );
 }
 
 function notActive(res, business, status, message) {
@@ -236,14 +237,14 @@ router.get('/r/demo', (req, res) =>
   ),
 );
 
-router.get('/r/:slug', (req, res) => {
-  const b = findBySlug(req.params.slug);
+router.get('/r/:slug', wrap(async (req, res) => {
+  const b = await findBySlug(req.params.slug);
   if (!b) return notActive(res, null, 404, "We couldn't find that review link.");
   if (!qrIsLive(b)) return notActive(res, b, 410, "This review link isn't active right now.");
 
   const owner = isOwner(req, b);
   const source = typeof req.query.s === 'string' ? req.query.s : 'qr';
-  if (!owner && req.method === 'GET') recordVisit(b.id, { source, ip: req.ip, ua: req.get('user-agent') });
+  if (!owner && req.method === 'GET') await recordVisit(b.id, { source, ip: clientIp(req), ua: req.get('user-agent') });
 
   res.set('Cache-Control', 'no-store').send(
     barePage({
@@ -266,17 +267,17 @@ router.get('/r/:slug', (req, res) => {
         </main>`,
     }),
   );
-});
+}));
 
-router.get('/r/:slug/go', (req, res) => {
-  const b = findBySlug(req.params.slug);
+router.get('/r/:slug/go', wrap(async (req, res) => {
+  const b = await findBySlug(req.params.slug);
   if (!b) return notActive(res, null, 404, "We couldn't find that review link.");
   if (!qrIsLive(b)) return notActive(res, b, 410, "This review link isn't active right now.");
   if (!isOwner(req, b) && req.method === 'GET') {
-    recordVisit(b.id, { event: 'google', source: req.query.s, ip: req.ip, ua: req.get('user-agent') });
+    await recordVisit(b.id, { event: 'google', source: req.query.s, ip: clientIp(req), ua: req.get('user-agent') });
   }
   res.set('Cache-Control', 'no-store').set('Referrer-Policy', 'no-referrer').redirect(302, b.google_review_url);
-});
+}));
 
 function initials(name) {
   return String(name)

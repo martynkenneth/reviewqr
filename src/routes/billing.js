@@ -3,7 +3,8 @@
 const express = require('express');
 const Stripe = require('stripe');
 const config = require('../config');
-const { db, now } = require('../db');
+const { query, one } = require('../db');
+const wrap = require('../wrap');
 const { html } = require('../html');
 const { appPage } = require('../views/layout');
 const { icon } = require('../views/icons');
@@ -19,11 +20,13 @@ const planForPrice = (priceId) => config.plans.find((p) => p.priceId === priceId
 
 // Copies a Stripe subscription onto our user row. Called from webhooks and
 // straight after checkout, so the screen is right even if a webhook is slow.
-function syncSubscription(sub) {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function syncSubscription(sub) {
   const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id;
-  let user = db.prepare('SELECT * FROM users WHERE stripe_customer_id = ?').get(customerId);
-  if (!user && sub.metadata && sub.metadata.user_id) {
-    user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(sub.metadata.user_id));
+  let user = await one('SELECT * FROM profiles WHERE stripe_customer_id = $1', [customerId]);
+  if (!user && sub.metadata && UUID.test(sub.metadata.user_id || '')) {
+    user = await one('SELECT * FROM profiles WHERE id = $1', [sub.metadata.user_id]);
   }
   if (!user) return null;
   // An old, replaced subscription finishing shouldn't overwrite the new one.
@@ -32,17 +35,18 @@ function syncSubscription(sub) {
   const item = sub.items && sub.items.data && sub.items.data[0];
   const plan = item ? planForPrice(item.price.id) : null;
   const periodEnd = sub.current_period_end || (item && item.current_period_end);
-  db.prepare(
-    `UPDATE users SET stripe_customer_id = ?, stripe_subscription_id = ?, subscription_status = ?, plan_id = ?,
-       current_period_end = ?, cancel_at_period_end = ? WHERE id = ?`,
-  ).run(
-    customerId,
-    sub.id,
-    sub.status,
-    plan ? plan.id : user.plan_id,
-    toIso(periodEnd),
-    sub.cancel_at_period_end || sub.cancel_at ? 1 : 0,
-    user.id,
+  await query(
+    `UPDATE profiles SET stripe_customer_id = $1, stripe_subscription_id = $2, subscription_status = $3, plan_id = $4,
+       current_period_end = $5, cancel_at_period_end = $6 WHERE id = $7`,
+    [
+      customerId,
+      sub.id,
+      sub.status,
+      plan ? plan.id : user.plan_id,
+      toIso(periodEnd),
+      Boolean(sub.cancel_at_period_end || sub.cancel_at),
+      user.id,
+    ],
   );
   return user;
 }
@@ -50,7 +54,7 @@ function syncSubscription(sub) {
 async function customerFor(user) {
   if (user.stripe_customer_id) return user.stripe_customer_id;
   const c = await stripe.customers.create({ email: user.email, metadata: { user_id: String(user.id) } });
-  db.prepare('UPDATE users SET stripe_customer_id = ? WHERE id = ?').run(c.id, user.id);
+  await query('UPDATE profiles SET stripe_customer_id = $1 WHERE id = $2', [c.id, user.id]);
   return c.id;
 }
 
@@ -130,7 +134,7 @@ router.get('/success', sec.requireUser, async (req, res, next) => {
     if (stripe && typeof req.query.session_id === 'string') {
       const s = await stripe.checkout.sessions.retrieve(req.query.session_id, { expand: ['subscription'] });
       if (s.client_reference_id === String(req.user.id) && s.subscription && typeof s.subscription === 'object') {
-        syncSubscription(s.subscription);
+        await syncSubscription(s.subscription);
       }
     }
     res.redirect(req.business ? '/app/settings?notice=subscribed' : '/app/setup');
@@ -180,7 +184,7 @@ async function handleEvent(event) {
       if (obj.mode === 'subscription' && obj.subscription) {
         const sub = await stripe.subscriptions.retrieve(obj.subscription);
         if (!sub.metadata.user_id && obj.client_reference_id) sub.metadata.user_id = obj.client_reference_id;
-        syncSubscription(sub);
+        await syncSubscription(sub);
       }
       break;
     case 'customer.subscription.created':
@@ -188,13 +192,13 @@ async function handleEvent(event) {
     case 'customer.subscription.deleted':
     case 'customer.subscription.paused':
     case 'customer.subscription.resumed':
-      syncSubscription(obj);
+      await syncSubscription(obj);
       break;
     case 'invoice.paid':
     case 'invoice.payment_failed': {
       const subId =
         obj.subscription || (obj.parent && obj.parent.subscription_details && obj.parent.subscription_details.subscription);
-      if (subId) syncSubscription(await stripe.subscriptions.retrieve(typeof subId === 'string' ? subId : subId.id));
+      if (subId) await syncSubscription(await stripe.subscriptions.retrieve(typeof subId === 'string' ? subId : subId.id));
       if (event.type === 'invoice.payment_failed' && obj.customer_email) {
         await sendMail({
           to: obj.customer_email,
@@ -218,10 +222,10 @@ async function webhook(req, res) {
     return res.status(400).send(`Webhook signature check failed`);
   }
   // Stripe may deliver an event more than once; handle each only once.
-  if (db.prepare('SELECT 1 FROM stripe_events WHERE id = ?').get(event.id)) return res.json({ received: true });
+  if (await one('SELECT 1 FROM stripe_events WHERE id = $1', [event.id])) return res.json({ received: true });
   try {
     await handleEvent(event);
-    db.prepare('INSERT OR IGNORE INTO stripe_events (id, received_at) VALUES (?, ?)').run(event.id, now());
+    await query('INSERT INTO stripe_events (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [event.id]);
     res.json({ received: true });
   } catch (e) {
     console.error('Stripe webhook failed', event.type, e);

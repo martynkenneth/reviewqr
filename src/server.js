@@ -3,11 +3,12 @@ const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const config = require('./config');
-require('./db');
 const sec = require('./security');
 const { html } = require('./html');
 const { sitePage } = require('./views/layout');
 const billing = require('./routes/billing');
+const storage = require('./lib/storage');
+const wrap = require('./wrap');
 
 function createApp() {
   const app = express();
@@ -23,28 +24,31 @@ function createApp() {
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'"],
           styleSrc: ["'self'", "'unsafe-inline'"], // brand colours are set per page
-          imgSrc: ["'self'", 'data:', 'blob:'],
+          // Logos are served from /u/; outside Netlify that redirects to Supabase Storage.
+          imgSrc: ["'self'", 'data:', 'blob:', ...(config.supabase.url ? [config.supabase.url] : [])],
           connectSrc: ["'self'"],
           formAction: ["'self'", 'https://checkout.stripe.com', 'https://billing.stripe.com'],
           frameAncestors: ["'none'"],
-          upgradeInsecureRequests: config.isProd ? [] : null,
+          upgradeInsecureRequests: config.secureCookies ? [] : null,
         },
       },
       crossOriginEmbedderPolicy: false,
-      hsts: config.isProd,
+      hsts: config.secureCookies,
     }),
   );
 
   // Stripe needs the untouched body to verify the signature.
-  app.post('/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), billing.webhook);
+  app.post('/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), wrap(billing.webhook));
 
   const pub = path.join(__dirname, '..', 'public');
   app.get('/sw.js', (req, res) => {
     res.set('Cache-Control', 'no-cache').sendFile(path.join(pub, 'sw.js'));
   });
-  app.use(express.static(pub, { maxAge: config.isProd ? '7d' : 0 }));
-  // Logos: random file names that change on every upload, so cache forever.
-  app.use('/u', express.static(config.uploadDir, { maxAge: '365d', immutable: true, index: false }));
+  // On Netlify these files are served by its CDN and never reach this code.
+  app.use(express.static(pub, { maxAge: config.secureCookies ? '7d' : 0 }));
+  // Logos have random names that change on every upload, so cache forever.
+  if (storage.publicUrl) app.get('/u/:file', (req, res) => res.redirect(301, storage.publicUrl(req.params.file)));
+  else app.use('/u', express.static(config.uploadDir, { maxAge: '365d', immutable: true, index: false }));
 
   app.use(express.urlencoded({ extended: false, limit: '100kb' }));
   app.use(express.json({ limit: '100kb' }));

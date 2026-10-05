@@ -2,12 +2,11 @@
 //
 // The QR always encodes the business's permanent short link (/r/<slug>), never
 // the Google URL itself, so the Google link can change without reprinting.
-const fs = require('fs');
-const path = require('path');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const PDFDocument = require('pdfkit');
 const config = require('../config');
+const storage = require('./storage');
 const { textPath, fit } = require('./text');
 const { textOn, qrColour } = require('./colour');
 
@@ -49,14 +48,10 @@ function qrPng(text, { px = 1200, colour } = {}) {
   return sharp(Buffer.from(qrSvg(text, { colour, px }))).png().toBuffer();
 }
 
-function logoPath(business) {
-  return business.logo_file ? path.join(config.uploadDir, path.basename(business.logo_file)) : null;
-}
-
 async function loadLogo(business) {
-  const file = logoPath(business);
-  if (!file || !fs.existsSync(file)) return null;
-  const buf = fs.readFileSync(file);
+  if (!business.logo_file) return null;
+  const buf = await storage.get(business.logo_file);
+  if (!buf) return null;
   const meta = await sharp(buf).metadata();
   return { href: `data:image/png;base64,${buf.toString('base64')}`, w: meta.width, h: meta.height };
 }

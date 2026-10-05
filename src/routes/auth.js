@@ -1,10 +1,11 @@
-// Sign up, log in, log out, forgot/reset password.
+// Sign up, log in, log out, confirm email, forgot/reset password.
+// Supabase Auth does the password checking and sends the emails.
 const express = require('express');
 const config = require('../config');
-const { db, now } = require('../db');
 const { html } = require('../html');
 const { sitePage } = require('../views/layout');
-const { sendMail } = require('../lib/mailer');
+const auth = require('../lib/auth');
+const wrap = require('../wrap');
 const sec = require('../security');
 
 const router = express.Router();
@@ -72,52 +73,136 @@ function loginForm(req, { error, notice, email = '' } = {}) {
 
 router.get('/signup', (req, res) => (req.user ? res.redirect('/app') : res.send(signupForm(req))));
 
-router.post('/signup', limiter, (req, res) => {
-  const email = cleanEmail(req.body.email);
-  const password = String(req.body.password || '');
-  if (!EMAIL.test(email)) return res.status(400).send(signupForm(req, { error: 'Please enter a valid email address.', email }));
-  const problem = sec.passwordProblem(password);
-  if (problem) return res.status(400).send(signupForm(req, { error: problem, email }));
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
-    return res
-      .status(400)
-      .send(signupForm(req, { error: 'That email already has an account. Try logging in instead.', email }));
-  }
-  const trialEnds = new Date(Date.now() + config.trialDays * 864e5).toISOString();
-  const { lastInsertRowid } = db
-    .prepare('INSERT INTO users (email, password_hash, created_at, trial_ends_at, is_admin) VALUES (?, ?, ?, ?, ?)')
-    .run(email, sec.hashPassword(password), now(), trialEnds, config.adminEmails.includes(email) ? 1 : 0);
-  sec.createSession(res, Number(lastInsertRowid));
-  res.redirect('/app/setup');
-});
+// Where Supabase's emailed links send people back to.
+const confirmUrl = () => `${config.baseUrl}/auth/confirm`;
+
+function checkEmailPage(req, email, what) {
+  return authPage(req, {
+    title: 'Check your email',
+    heading: 'Check your email',
+    intro: `We've sent a link to ${email}. ${what} You can open it on this phone or any other device.`,
+    form: html`<p class="muted small">Can't see it? Check your spam or junk folder. The link works for 1 hour.</p>`,
+    below: html`<a href="/login">Back to log in</a>`,
+  });
+}
+
+router.post(
+  '/signup',
+  limiter,
+  wrap(async (req, res) => {
+    const email = cleanEmail(req.body.email);
+    const password = String(req.body.password || '');
+    if (!EMAIL.test(email)) return res.status(400).send(signupForm(req, { error: 'Please enter a valid email address.', email }));
+    const problem = sec.passwordProblem(password);
+    if (problem) return res.status(400).send(signupForm(req, { error: problem, email }));
+
+    const r = await auth.signUp(email, password, confirmUrl());
+    if (r.error) return res.status(400).send(signupForm(req, { error: r.error, email }));
+    if (r.existing && !r.user) {
+      return res
+        .status(400)
+        .send(signupForm(req, { error: 'That email already has an account. Try logging in instead.', email }));
+    }
+    if (!r.session) {
+      // Email confirmation is switched on in Supabase. (When the email is
+      // already registered Supabase doesn't say so; this page is the same.)
+      return res.send(checkEmailPage(req, email, 'Tap it to confirm your email and finish setting up.'));
+    }
+    await sec.profileFor(r.user);
+    sec.setSessionCookies(res, r.session, { newLogin: true });
+    res.redirect('/app/setup');
+  }),
+);
 
 router.get('/login', (req, res) => (req.user ? res.redirect('/app') : res.send(loginForm(req))));
 
-router.post('/login', limiter, (req, res) => {
-  const email = cleanEmail(req.body.email);
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-  const ok = sec.verifyPassword(String(req.body.password || ''), user ? user.password_hash : sec.DUMMY_HASH);
-  if (!user || !ok) {
-    return res.status(401).send(loginForm(req, { error: "That email and password don't match.", email }));
-  }
-  if (user.disabled_at) {
-    return res
-      .status(403)
-      .send(loginForm(req, { error: `This account has been disabled. Please contact ${config.supportEmail}.`, email }));
-  }
-  if (config.adminEmails.includes(user.email) && !user.is_admin) {
-    db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id);
-  }
-  sec.createSession(res, user.id);
-  res.redirect(sec.safeNext(req.body.next));
+router.post(
+  '/login',
+  limiter,
+  wrap(async (req, res) => {
+    const email = cleanEmail(req.body.email);
+    const r = await auth.signIn(email, String(req.body.password || ''));
+    if (r.error === 'unconfirmed') {
+      return res.status(401).send(loginForm(req, { error: 'Please confirm your email first — check your inbox for our link.', email }));
+    }
+    if (r.error) return res.status(401).send(loginForm(req, { error: "That email and password don't match.", email }));
+    const profile = await sec.profileFor(r.user);
+    if (profile.disabled_at) {
+      await auth.signOut(r.session.access_token);
+      return res
+        .status(403)
+        .send(loginForm(req, { error: `This account has been disabled. Please contact ${config.supportEmail}.`, email }));
+    }
+    sec.setSessionCookies(res, r.session, { newLogin: true });
+    res.redirect(sec.safeNext(req.body.next));
+  }),
+);
+
+router.post(
+  '/logout',
+  wrap(async (req, res) => {
+    await sec.logOut(req, res);
+    // Wipe offline copies of private pages on this device.
+    res.set('Clear-Site-Data', '"cache", "storage"');
+    res.redirect('/');
+  }),
+);
+
+// --- Links from emails ---------------------------------------------------------
+//
+// Supabase emails a link to /auth/confirm?token_hash=...&type=...
+// Opening it shows a button rather than acting straight away, because some
+// email apps "preview" links automatically, which would use up the one-time
+// link before the person ever taps it.
+
+const CONFIRM_TYPES = {
+  email: { heading: 'Confirm your email', button: 'Confirm my email', next: '/app/setup' },
+  signup: { heading: 'Confirm your email', button: 'Confirm my email', next: '/app/setup', otpType: 'email' },
+  recovery: { heading: 'Reset your password', button: 'Choose a new password', next: '/reset-password' },
+  email_change: { heading: 'Confirm your new email', button: 'Confirm new email', next: '/app/settings?notice=email' },
+};
+
+const expiredPage = (req) =>
+  authPage(req, {
+    title: 'Link expired',
+    heading: 'That link has expired',
+    intro: 'Links from our emails only work once, for 1 hour.',
+    form: html`<a class="btn btn-block" href="/forgot">Reset your password</a>`,
+    below: html`<a href="/login">Back to log in</a>`,
+  });
+
+router.get('/auth/confirm', (req, res) => {
+  const t = CONFIRM_TYPES[req.query.type];
+  const token = typeof req.query.token_hash === 'string' ? req.query.token_hash : '';
+  if (!t || !token) return res.status(400).send(expiredPage(req));
+  res.send(
+    authPage(req, {
+      title: t.heading,
+      heading: t.heading,
+      form: html`<form method="post" action="/auth/confirm" class="stack">
+        <input type="hidden" name="_csrf" value="${req.csrfToken}" />
+        <input type="hidden" name="token_hash" value="${token}" />
+        <input type="hidden" name="type" value="${req.query.type}" />
+        <button class="btn btn-block btn-large" type="submit">${t.button}</button>
+      </form>`,
+    }),
+  );
 });
 
-router.post('/logout', (req, res) => {
-  sec.destroySession(req, res);
-  // Wipe offline copies of private pages on this device.
-  res.set('Clear-Site-Data', '"cache", "storage"');
-  res.redirect('/');
-});
+router.post(
+  '/auth/confirm',
+  limiter,
+  wrap(async (req, res) => {
+    const t = CONFIRM_TYPES[req.body.type];
+    if (!t) return res.status(400).send(expiredPage(req));
+    const r = await auth.verifyOtp(String(req.body.token_hash || ''), t.otpType || req.body.type);
+    if (r.error) return res.status(400).send(expiredPage(req));
+    const profile = await sec.profileFor(r.user);
+    if (profile.disabled_at) return res.status(403).send(loginForm(req, { error: 'This account has been disabled.' }));
+    sec.setSessionCookies(res, r.session, { newLogin: true });
+    res.redirect(t.next);
+  }),
+);
 
 // --- Forgot / reset password ---------------------------------------------------
 
@@ -137,49 +222,23 @@ router.get('/forgot', (req, res) =>
   ),
 );
 
-router.post('/forgot', emailLimiter, async (req, res, next) => {
-  try {
+router.post(
+  '/forgot',
+  emailLimiter,
+  wrap(async (req, res) => {
     const email = cleanEmail(req.body.email);
-    const user = db.prepare('SELECT id, email FROM users WHERE email = ? AND disabled_at IS NULL').get(email);
-    if (user) {
-      const token = sec.randomToken();
-      db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(
-        sec.sha256(token),
-        user.id,
-        new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      );
-      await sendMail({
-        to: user.email,
-        subject: `Reset your ${config.appName} password`,
-        text: `Someone (hopefully you) asked to reset your ${config.appName} password.\n\nSet a new password here (link works for 1 hour):\n${config.baseUrl}/reset/${token}\n\nIf you didn't ask for this, you can ignore this email.`,
-      });
-    }
+    if (EMAIL.test(email)) await auth.sendPasswordReset(email, confirmUrl());
     // Same answer either way, so this can't be used to discover who has an account.
-    res.send(
-      authPage(req, {
-        title: 'Check your email',
-        heading: 'Check your email',
-        intro: `If ${email} has an account, we've sent a link to reset the password. It works for 1 hour.`,
-        form: '',
-        below: html`<a href="/login">Back to log in</a>`,
-      }),
-    );
-  } catch (e) {
-    next(e);
-  }
-});
-
-function validReset(token) {
-  const row = db.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get(sec.sha256(String(token)));
-  return row && !row.used_at && row.expires_at > now() ? row : null;
-}
+    res.send(checkEmailPage(req, email, 'If there is an account for that email, the link lets you choose a new password.'));
+  }),
+);
 
 function resetForm(req, error) {
   return authPage(req, {
     title: 'Choose a new password',
     heading: 'Choose a new password',
     form: html`${errorBox(error)}
-      <form method="post" class="stack">
+      <form method="post" action="/reset-password" class="stack">
         <input type="hidden" name="_csrf" value="${req.csrfToken}" />
         <label>New password<input type="password" name="password" autocomplete="new-password" minlength="8" required /></label>
         <button class="btn btn-block btn-large" type="submit">Save password</button>
@@ -187,29 +246,21 @@ function resetForm(req, error) {
   });
 }
 
-router.get('/reset/:token', (req, res) => {
-  if (!validReset(req.params.token)) {
-    return res.status(400).send(
-      authPage(req, {
-        title: 'Link expired',
-        heading: 'That link has expired',
-        intro: 'Reset links only work once, for 1 hour.',
-        form: html`<a class="btn btn-block" href="/forgot">Send a new link</a>`,
-      }),
-    );
-  }
-  res.send(resetForm(req));
-});
+// Reached through the emailed reset link, which logs them in first.
+router.get('/reset-password', sec.requireUser, (req, res) => res.send(resetForm(req)));
 
-router.post('/reset/:token', limiter, (req, res) => {
-  const row = validReset(req.params.token);
-  if (!row) return res.redirect(`/reset/${encodeURIComponent(req.params.token)}`);
-  const problem = sec.passwordProblem(req.body.password);
-  if (problem) return res.status(400).send(resetForm(req, problem));
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(sec.hashPassword(req.body.password), row.user_id);
-  db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(now(), row.user_id);
-  sec.destroyAllSessions(row.user_id); // log out everywhere else
-  res.send(loginForm(req, { notice: 'Password changed. Please log in.' }));
-});
+router.post(
+  '/reset-password',
+  sec.requireUser,
+  limiter,
+  wrap(async (req, res) => {
+    const problem = sec.passwordProblem(req.body.password);
+    if (problem) return res.status(400).send(resetForm(req, problem));
+    const r = await auth.setPassword(req.user.id, req.body.password);
+    if (r.error) return res.status(400).send(resetForm(req, r.error));
+    await auth.signOut(req.tokens.access_token, 'others'); // log out everywhere else
+    res.redirect(req.business ? '/app/settings?notice=password' : '/app/setup');
+  }),
+);
 
 module.exports = { router, EMAIL, cleanEmail, errorBox, noticeBox };

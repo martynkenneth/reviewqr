@@ -1,32 +1,37 @@
 {
   "name": "qrreview",
   "version": "0.1.0",
-  "description": "Branded Google review QR codes for UK small businesses, starting with trades (mobile-first PWA)",
+  "description": "Branded Google review QR codes for UK small businesses, starting with trades (Netlify + Supabase PWA)",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "netlify-build": "node scripts/netlify-build.js",
     "make-icons": "node scripts/make-icons.js",
-    "make-admin": "node --disable-warning=ExperimentalWarning scripts/make-admin.js"
+    "make-admin": "node scripts/make-admin.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
+    "@supabase/supabase-js": "^2.117.2",
     "cookie-parser": "^1.4.7",
     "express": "^4.22.3",
     "helmet": "^8.3.0",
     "multer": "^2.4.0",
     "nodemailer": "^10.0.12",
     "pdfkit": "^0.20.2",
+    "pg": "^8.23.1",
     "qrcode": "^1.5.4",
+    "serverless-http": "^4.0.0",
     "sharp": "^0.35.5",
     "stripe": "^22.6.2"
   },
   "private": true,
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "jsqr": "^1.4.0"
   }
 }

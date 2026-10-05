@@ -4,32 +4,46 @@ A mobile-first web app (installable PWA) for UK small businesses, starting with 
 
 **Finish job → open app → Show QR → customer scans → Google review page.**
 
+Runs on **Netlify** (the app, as one serverless function, plus static files on the CDN) and **Supabase** (Postgres database, login, and logo storage).
+
+**To put it online, follow [docs/SETUP.md](docs/SETUP.md).**
+
 ## Run it locally
 
-Needs Node.js 22.13 or newer. There's no database server to install, because it uses SQLite built into Node.
+Needs Node.js 22 or newer. You don't need Supabase to try it locally:
+- If no `SUPABASE_*` settings are present, the app uses stand-ins: a Postgres that runs inside Node (PGlite), a local copy of Supabase's login flow, and a folder for logos.
+- Emails, such as confirmation and reset links, are printed in the terminal.
 
 ```bash
 git clone https://github.com/martynkenneth/reviewqr && cd reviewqr
 npm install
 npm run dev          # http://localhost:3000
-npm test             # end-to-end tests (including decoding the generated QR codes)
+npm test             # end-to-end tests, including decoding the generated QR codes
 ```
 
-Without SMTP settings, emails such as password resets are printed to the terminal. Without Stripe settings, the app still runs, the 14-day trial works, and the Plans screen says payments aren't switched on yet.
+Without Stripe settings, the app still runs and the 14-day trial works. The Plans screen says payments aren't switched on yet.
 
-To make yourself an admin, put your email in `ADMIN_EMAILS` or run `npm run make-admin -- you@example.com`.
+To make yourself an admin, put your email in `ADMIN_EMAILS`. You're promoted the next time you log in.
 
-## Going live
+## Stripe
 
-1. The domain is **qrreview.co.uk**. Set `BASE_URL=https://qrreview.co.uk`. It's printed inside every QR code, so it must never change after people start printing, and the domain must never be allowed to lapse (keep auto-renew on).
-2. Host it on anything that runs Node with a **persistent disk** for `DATA_DIR` (Render, Railway, Fly.io, a small VPS). A `Dockerfile` is included. Mount a volume at `/data`.
-3. Copy `.env.example` to `.env` (or set the same variables in your host's dashboard).
-4. **Stripe:**
-   - Create a Product with two recurring Prices: £9.99/month and £99/year. Put their IDs in `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_ANNUAL`.
-   - Add a webhook endpoint `https://qrreview.co.uk/stripe/webhook` with these events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
-   - In **Settings → Billing → Customer portal**, turn on: cancel subscriptions, update payment methods, and switch plans (add both Prices). That gives you upgrade/downgrade with no extra code.
-   - Turn on Stripe's automatic retry and failed-payment emails ("Smart Retries").
-5. Back up `DATA_DIR` (the database plus uploaded logos) every day.
+- **Prices.** Create a Product with two recurring Prices: £9.99/month and £99/year. Put their IDs in `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_ANNUAL`.
+- **Webhook.** Add a webhook endpoint `https://qrreview.co.uk/stripe/webhook` with these events:
+  - `checkout.session.completed`
+  - `customer.subscription.created`
+  - `customer.subscription.updated`
+  - `customer.subscription.deleted`
+  - `invoice.paid`
+  - `invoice.payment_failed`
+
+  Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+- **Customer portal.** Under **Settings → Billing → Customer portal**, turn on cancelling subscriptions, updating payment methods, and switching plans (add both Prices). That gives upgrade and downgrade with no extra code.
+- **Retries.** Turn on Stripe's automatic retry and failed-payment emails ("Smart Retries").
+
+## Things that must never change or lapse
+
+- **`BASE_URL` / the domain.** `https://qrreview.co.uk` is printed inside every QR code. Keep auto-renew on.
+- **The `logos` bucket and the database.** Upgrade to Supabase Pro before taking paying customers. Free projects pause when idle, and Pro adds daily backups.
 
 ## How it works
 
@@ -37,11 +51,14 @@ To make yourself an admin, put your email in `ADMIN_EMAILS` or run `npm run make
 |---|---|
 | Permanent short link `/r/<slug>` → branded customer page → `/r/<slug>/go` → 302 to Google | `src/routes/public.js` |
 | QR, branded PNG, A6/A5/A4 PDFs (fonts bundled, so they look the same on any server) | `src/lib/qr.js`, `src/lib/text.js` |
-| Sign-up, login, password reset | `src/routes/auth.js` |
+| Sign-up, login, email links (confirm, reset, change email) via Supabase Auth | `src/routes/auth.js`, `src/lib/auth/` |
+| Login cookies, CSRF, rate limits | `src/security.js` |
+| Logo storage (Supabase Storage, served at `/u/…`) | `src/lib/storage.js` |
 | Setup, dashboard, Show QR, download, share, visits, settings | `src/routes/app.js` |
 | Stripe Checkout, Billing Portal, cancel, webhooks | `src/routes/billing.js` |
 | Admin | `src/routes/admin.js` |
-| Tables: users, businesses, qr_visits, sessions, password_resets | `src/db.js` |
+| Tables: profiles, businesses, qr_visits, stripe_events (locked with row level security) | `db/schema.sql`, `src/db.js` |
+| Netlify function entry point, build step and settings | `netlify/functions/app.js`, `scripts/netlify-build.js`, `netlify.toml` |
 | Plans and prices (config, not hard-coded) | `src/config.js` |
 | Offline "Show QR", installable app | `public/sw.js`, `public/manifest.webmanifest` |
 
@@ -55,14 +72,16 @@ To make yourself an admin, put your email in `ADMIN_EMAILS` or run `npm run make
 
 ### Security
 
-- Passwords are hashed with scrypt.
-- The session cookie is httpOnly and SameSite, and only the token's hash is stored in the database.
-- Every form has CSRF protection.
-- Logins, sign-ups and resets are rate-limited.
-- A strict Content Security Policy is set, and the app has no inline scripts.
-- Uploaded logos are checked by their contents (JPG/PNG/WebP only), limited to 5MB, and re-encoded to clean PNGs.
-- Every query is scoped to the logged-in user.
-- Card details go only to Stripe.
+- **Passwords** are held by Supabase Auth; the app never stores them.
+- **Login cookies.** The Supabase login tokens sit in httpOnly, SameSite cookies, and expired tokens are refreshed quietly.
+- **Email links** (confirm, reset, change email) open a page with a button rather than acting straight away. Email apps that preview links therefore can't use them up.
+- **CSRF protection** on every form.
+- **Rate limits** on logins and email-sending forms, on top of Supabase's own limits.
+- **Database tables are locked** with row level security. Only the app's server can read or write them; browsers can't, even through Supabase's API.
+- **Content Security Policy.** A strict one is set, and the app has no inline scripts.
+- **Uploaded logos** are checked by their contents (JPG/PNG/WebP only) and re-encoded to clean PNGs. Large phone photos are shrunk in the browser first, and the server limit is 4MB.
+- **Scoped queries.** Every query is limited to the logged-in user.
+- **Card details** go only to Stripe.
 
 ### Decisions you may want to change
 

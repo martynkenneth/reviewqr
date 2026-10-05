@@ -1,7 +1,9 @@
 // A deliberately small admin area: headline numbers, recent sign-ups, view an
 // account, disable/enable it. Only users with is_admin = 1 can reach it.
 const express = require('express');
-const { db, now } = require('../db');
+const { query, one } = require('../db');
+const auth = require('../lib/auth');
+const wrap = require('../wrap');
 const { html } = require('../html');
 const { appPage } = require('../views/layout');
 const account = require('../lib/account');
@@ -16,30 +18,30 @@ const fmt = (d) => (d ? new Date(d).toLocaleString('en-GB', { dateStyle: 'medium
 
 const STATE_LABEL = { trial: 'Trial', active: 'Active', past_due: 'Payment failed', expired: 'Expired / cancelled' };
 
-router.get('/', (req, res) => {
-  const users = db.prepare('SELECT * FROM users').all();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+router.get('/', wrap(async (req, res) => {
+  const users = await query('SELECT * FROM profiles');
   const counts = { total: users.length, trial: 0, active: 0, past_due: 0, expired: 0, disabled: 0, canceled: 0 };
   for (const u of users) {
     counts[account.accessState(u)]++;
     if (u.disabled_at) counts.disabled++;
     if (u.subscription_status === 'canceled' || u.cancel_at_period_end) counts.canceled++;
   }
-  const visits = db.prepare("SELECT COUNT(*) AS n FROM qr_visits WHERE event = 'view'").get().n;
-  const recent = db
-    .prepare(
-      `SELECT u.id, u.email, u.created_at, u.disabled_at, u.subscription_status, u.trial_ends_at, u.current_period_end,
-              u.stripe_subscription_id, b.name
-       FROM users u LEFT JOIN businesses b ON b.user_id = u.id ORDER BY u.id DESC LIMIT 50`,
-    )
-    .all();
+  const visits = (await one("SELECT count(*)::int AS n FROM qr_visits WHERE event = 'view'")).n;
+  const recent = await query(
+    `SELECT u.id, u.email, u.created_at, u.disabled_at, u.subscription_status, u.trial_ends_at, u.current_period_end,
+            u.stripe_subscription_id, b.name
+     FROM profiles u LEFT JOIN businesses b ON b.user_id = u.id ORDER BY u.created_at DESC LIMIT 50`,
+  );
   const q = String(req.query.q || '').trim();
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const found = q
-    ? db
-        .prepare(
-          `SELECT u.id, u.email, b.name FROM users u LEFT JOIN businesses b ON b.user_id = u.id
-           WHERE u.email LIKE ? OR b.name LIKE ? OR b.qr_slug = ? LIMIT 20`,
-        )
-        .all(`%${q}%`, `%${q}%`, q.toLowerCase())
+    ? await query(
+        `SELECT u.id, u.email, b.name FROM profiles u LEFT JOIN businesses b ON b.user_id = u.id
+         WHERE u.email ILIKE $1 OR b.name ILIKE $1 OR b.qr_slug = $2 LIMIT 20`,
+        [like, q.toLowerCase()],
+      )
     : null;
 
   const tile = (n, label) => html`<div class="card stat"><span class="stat-num">${n}</span><span class="stat-label">${label}</span></div>`;
@@ -88,13 +90,14 @@ router.get('/', (req, res) => {
         </section>`,
     }),
   );
-});
+}));
 
-router.get('/users/:id', (req, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
+router.get('/users/:id', wrap(async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(404).send('Not found');
+  const u = await one('SELECT * FROM profiles WHERE id = $1', [req.params.id]);
   if (!u) return res.status(404).send('Not found');
-  const b = db.prepare('SELECT * FROM businesses WHERE user_id = ?').get(u.id);
-  const s = b ? stats(b.id) : null;
+  const b = await one('SELECT * FROM businesses WHERE user_id = $1', [u.id]);
+  const s = b ? await stats(b.id) : null;
   const row = (k, v) => html`<dt>${k}</dt><dd>${v}</dd>`;
   res.send(
     appPage({
@@ -128,19 +131,24 @@ router.get('/users/:id', (req, res) => {
         <p class="muted small">Disabling doesn't cancel a Stripe subscription — do that in the Stripe dashboard if needed.</p>`,
     }),
   );
-});
+}));
 
-router.post('/users/:id/disable', (req, res) => {
-  const id = Number(req.params.id);
+// Disabling blocks their login (in Supabase too) and stops their QR page.
+router.post('/users/:id/disable', wrap(async (req, res) => {
+  const id = req.params.id;
+  if (!UUID.test(id)) return res.status(404).send('Not found');
   if (id === req.user.id) return res.redirect(`/admin/users/${id}`);
-  db.prepare('UPDATE users SET disabled_at = ? WHERE id = ?').run(now(), id);
-  sec.destroyAllSessions(id);
+  await query('UPDATE profiles SET disabled_at = now() WHERE id = $1', [id]);
+  await auth.setBanned(id, true);
   res.redirect(`/admin/users/${id}`);
-});
+}));
 
-router.post('/users/:id/enable', (req, res) => {
-  db.prepare('UPDATE users SET disabled_at = NULL WHERE id = ?').run(Number(req.params.id));
-  res.redirect(`/admin/users/${Number(req.params.id)}`);
-});
+router.post('/users/:id/enable', wrap(async (req, res) => {
+  const id = req.params.id;
+  if (!UUID.test(id)) return res.status(404).send('Not found');
+  await query('UPDATE profiles SET disabled_at = NULL WHERE id = $1', [id]);
+  await auth.setBanned(id, false);
+  res.redirect(`/admin/users/${id}`);
+}));
 
 module.exports = { router };

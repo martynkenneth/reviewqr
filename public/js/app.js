@@ -162,16 +162,43 @@
         logoIn.value = '';
         return;
       }
-      if (f.size > 5 * 1024 * 1024) {
-        toast('That image is over 5MB');
-        logoIn.value = '';
-        return;
-      }
       var url = URL.createObjectURL(f);
       logoThumb.src = logoPrev.src = url;
       logoThumb.hidden = logoPrev.hidden = false;
       if (removeLogo) removeLogo.checked = false;
+      if (f.size > 1024 * 1024) shrinkLogo(f, url);
     });
+
+    // Phone photos are often several MB. Shrink big images here so the upload
+    // is quick and under the 4MB limit (the server resizes to 800px anyway).
+    var shrinkLogo = function (f, url) {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, 1200 / Math.max(img.width, img.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(function (blob) {
+          if (!blob || !window.DataTransfer) return tooBig(f);
+          try {
+            var dt = new DataTransfer();
+            dt.items.add(new File([blob], 'logo.png', { type: 'image/png' }));
+            logoIn.files = dt.files;
+          } catch (e) {
+            tooBig(f);
+          }
+        }, 'image/png');
+      };
+      img.onerror = function () { tooBig(f); };
+      img.src = url;
+    };
+    var tooBig = function (f) {
+      if (f.size <= 4 * 1024 * 1024) return;
+      toast('That image is over 4MB — please choose a smaller one');
+      logoIn.value = '';
+      logoThumb.hidden = logoPrev.hidden = true;
+    };
     if (removeLogo) {
       removeLogo.addEventListener('change', function () { logoPrev.hidden = removeLogo.checked; });
     }

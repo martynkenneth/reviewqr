@@ -1,0 +1,36 @@
+# Netlify settings. Everything else is configured with environment variables
+# in the Netlify dashboard — see docs/SETUP.md.
+[build]
+  command = "npm run netlify-build"
+  publish = "public"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "nft"
+  # sharp (image processing) ships native code and must be copied, not bundled.
+  external_node_modules = ["sharp"]
+  # Files the app reads from disk, which the bundler can't discover by itself.
+  # (Checked by packaging the function locally and running it standalone.)
+  included_files = [
+    "node_modules/@img/**",
+    "!node_modules/@img/*linuxmusl*/**",
+    "node_modules/pdfkit/js/**",
+    "node_modules/@fontsource/inter/files/inter-latin-*-normal.woff",
+    "db/*.sql",
+    # The in-process test database is never used on Netlify.
+    "!node_modules/@electric-sql/**",
+  ]
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

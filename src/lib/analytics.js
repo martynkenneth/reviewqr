@@ -3,7 +3,8 @@
 // We count visits to OUR page (/r/<slug>) and taps through to Google. We can't
 // see whether a review was actually posted, so nothing here claims that.
 const crypto = require('crypto');
-const { db, now } = require('../db');
+const config = require('../config');
+const { query, one } = require('../db');
 
 const TZ = 'Europe/London';
 const dayKey = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d); // YYYY-MM-DD
@@ -15,36 +16,40 @@ const BOT_UA =
 const isBot = (ua) => !ua || BOT_UA.test(ua);
 
 // Salted with the date, so the same phone is recognisable within a day (to
-// spot repeat taps) but never across days, and we never store the IP itself.
-let salt = { day: null, value: null };
+// spot repeat taps) but not across days, and we never store the IP itself.
+// The salt comes from a server secret, so every running copy of the app
+// (Netlify runs several) works out the same value for the same day.
+const SECRET =
+  process.env.VISITOR_HASH_SECRET ||
+  (config.supabase.serviceKey && crypto.createHash('sha256').update(`visitor|${config.supabase.serviceKey}`).digest('hex')) ||
+  crypto.randomBytes(32).toString('hex');
 function visitorHash(ip, ua) {
-  const today = dayKey(new Date());
-  if (salt.day !== today) salt = { day: today, value: crypto.randomBytes(16).toString('hex') };
-  return crypto.createHash('sha256').update(`${salt.value}|${ip}|${ua}`).digest('hex').slice(0, 16);
+  const salt = crypto.createHmac('sha256', SECRET).update(dayKey(new Date())).digest('hex');
+  return crypto.createHash('sha256').update(`${salt}|${ip}|${ua}`).digest('hex').slice(0, 16);
 }
 
 const SOURCES = new Set(['qr', 'link', 'nfc', 'card', 'van', 'invoice', 'web', 'email']);
 
-function recordVisit(businessId, { event = 'view', source, ip, ua }) {
+async function recordVisit(businessId, { event = 'view', source, ip, ua }) {
   if (isBot(ua)) return false;
   const src = SOURCES.has(source) ? source : 'qr';
-  db.prepare('INSERT INTO qr_visits (business_id, created_at, event, source, visitor_hash) VALUES (?, ?, ?, ?, ?)').run(
+  await query('INSERT INTO qr_visits (business_id, event, source, visitor_hash) VALUES ($1, $2, $3, $4)', [
     businessId,
-    now(),
     event,
     src,
     visitorHash(ip, ua),
-  );
+  ]);
   return true;
 }
 
-function stats(businessId) {
+async function stats(businessId) {
   const today = dayKey(new Date());
   const month = today.slice(0, 7);
   const since = new Date(Date.now() - 32 * 864e5).toISOString();
-  const rows = db
-    .prepare('SELECT created_at, event FROM qr_visits WHERE business_id = ? AND created_at >= ?')
-    .all(businessId, since);
+  const rows = await query('SELECT created_at, event FROM qr_visits WHERE business_id = $1 AND created_at >= $2', [
+    businessId,
+    since,
+  ]);
 
   const days = [];
   for (let i = 29; i >= 0; i--) days.push({ day: dayKey(new Date(Date.now() - i * 864e5)), views: 0 });
@@ -59,11 +64,11 @@ function stats(businessId) {
       if (byDay.has(k)) byDay.get(k).views++;
     } else if (r.event === 'google' && k.startsWith(month)) s.monthGoogle++;
   }
-  const all = db
-    .prepare(
-      `SELECT SUM(event = 'view') AS views, SUM(event = 'google') AS google FROM qr_visits WHERE business_id = ?`,
-    )
-    .get(businessId);
+  const all = await one(
+    `SELECT count(*) FILTER (WHERE event = 'view')::int AS views, count(*) FILTER (WHERE event = 'google')::int AS google
+     FROM qr_visits WHERE business_id = $1`,
+    [businessId],
+  );
   s.allTime = all.views || 0;
   s.allTimeGoogle = all.google || 0;
   s.days = days;

@@ -1,13 +1,13 @@
 // Logo uploads. We check the file really is a JPG/PNG/WebP by its contents
 // (not its name), then re-encode it as a fresh PNG. Re-encoding throws away
 // anything hidden in the original file and keeps every logo a sensible size.
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const sharp = require('sharp');
-const config = require('../config');
+const storage = require('./storage');
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// 4MB: Netlify Functions accept requests up to 6MB, and uploads grow by a
+// third on the way in, so this is the largest that's always safe.
+const MAX_BYTES = 4 * 1024 * 1024;
 
 function sniff(buf) {
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpeg';
@@ -18,7 +18,7 @@ function sniff(buf) {
 
 async function saveLogo(buf) {
   if (!buf || !buf.length) return { error: 'Please choose an image file.' };
-  if (buf.length > MAX_BYTES) return { error: 'That image is too big. Please use one under 5MB.' };
+  if (buf.length > MAX_BYTES) return { error: 'That image is too big. Please use one under 4MB.' };
   const type = sniff(buf);
   if (!type) return { error: 'Please upload a JPG, PNG or WebP image.' };
   let png;
@@ -45,13 +45,13 @@ async function saveLogo(buf) {
     return { error: "We couldn't read that image. Please try a different file." };
   }
   const name = `${crypto.randomBytes(12).toString('hex')}.png`;
-  fs.writeFileSync(path.join(config.uploadDir, name), png);
+  await storage.put(name, png);
   return { file: name };
 }
 
-function deleteLogo(name) {
+async function deleteLogo(name) {
   if (!name) return;
-  fs.rm(path.join(config.uploadDir, path.basename(name)), { force: true }, () => {});
+  await storage.remove(name).catch(() => {}); // a leftover file is harmless
 }
 
 module.exports = { saveLogo, deleteLogo, MAX_BYTES };

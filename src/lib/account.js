@@ -2,7 +2,7 @@
 // to know whether an account is paid up.
 const crypto = require('crypto');
 const config = require('../config');
-const { db } = require('../db');
+const { one } = require('../db');
 
 const PAID = new Set(['active']);
 // Stripe keeps retrying failed payments for a while; don't lock people out
@@ -39,12 +39,12 @@ const planById = (id) => config.plans.find((p) => p.id === id) || null;
 
 // Short, permanent, easy to read aloud: no 0/O, 1/l/i.
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
-function newSlug() {
+async function newSlug() {
   for (;;) {
     let s = '';
     const bytes = crypto.randomBytes(7);
     for (const b of bytes) s += ALPHABET[b % ALPHABET.length];
-    if (!db.prepare('SELECT 1 FROM businesses WHERE qr_slug = ?').get(s)) return s;
+    if (!(await one('SELECT 1 FROM businesses WHERE qr_slug = $1', [s]))) return s;
   }
 }
 
